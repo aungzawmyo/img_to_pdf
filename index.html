@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PDF Book Maker</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;700&family=Noto+Sans+Myanmar:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+<main>
+<h1>📚 PDF Book Maker</h1>
+<div class="grid">
+ <section class="card">
+  <h2>1. Cover</h2>
+  <label>Book title</label><input type="text" id="title" value="My Photo Book">
+  <label>Author / subtitle (optional)</label><input type="text" id="author">
+  <div class="row">
+   <div><label>Background</label><input type="color" id="bg" value="#2f5d8a"></div>
+   <div><label>Text color</label><input type="color" id="fg" value="#ffffff"></div>
+  </div>
+  <div class="row">
+   <div><label>Text position</label><select id="pos"><option value="top">Top</option><option value="center" selected>Center</option><option value="bottom">Bottom</option></select></div>
+   <div><label>Font</label><select id="font"><option value="'Noto Sans Thai','Noto Sans Myanmar',Georgia,serif">Serif / Thai / Burmese</option><option value="'Noto Sans Thai','Noto Sans Myanmar',Arial,sans-serif">Sans / Thai / Burmese</option></select></div>
+  </div>
+  <label>Cover image (optional)</label><input type="file" id="coverfile" accept="image/*">
+  <div class="mt12"><canvas id="cv"></canvas></div>
+ </section>
+ <section class="card">
+  <h2>2. Options</h2>
+  <div class="row">
+   <div><label>Page size</label><select id="size"><option value="a4">A4</option><option value="letter">Letter</option><option value="match">Match image size</option></select></div>
+   <div><label>Orientation</label><select id="orient"><option value="p">Portrait</option><option value="l">Landscape</option></select></div>
+  </div>
+  <div class="row">
+   <div><label>Fit mode</label><select id="fit"><option value="fit">Fit (keep whole image)</option><option value="fill">Fill (crop)</option><option value="stretch">Stretch</option></select></div>
+   <div><label>Margins</label><select id="margin"><option value="0">None</option><option value="8" selected>Small</option><option value="20">Large</option></select></div>
+  </div>
+  <div class="row">
+   <div><label>Quality</label><select id="quality"><option value="2400,0.92">High</option><option value="1600,0.8" selected>Medium</option><option value="1000,0.65">Small file</option></select></div>
+   <div><label>Page numbers</label><select id="pnum"><option value="1">On</option><option value="0">Off</option></select></div>
+  </div>
+  <p class="hint">Titles in Thai or Burmese work: the cover is drawn with web fonts.</p>
+ </section>
+</div>
+
+<section class="card">
+ <h2>3. Images <span id="count" class="hint"></span></h2>
+ <div id="drop">Drop images here or click to choose (JPG, PNG, WebP)<input type="file" id="files" accept="image/*" multiple hidden></div>
+ <div id="thumbs"></div>
+ <p class="hint">Drag thumbnails to reorder. ✎ opens the editor (crop, transform, warp, adjust, stickers, text, AI).</p>
+</section>
+
+<section class="card">
+ <h2>4. Preview and download</h2>
+ <button class="p" id="prevbtn">Preview PDF</button>
+ <div id="msg" class="hint mt8"></div>
+</section>
+</main>
+
+<div class="modal" id="ed"><div class="mb">
+ <div class="row tabs" id="tabs">
+  <button data-t="crop" class="on">Crop</button><button data-t="transform">Transform</button><button data-t="warp">Warp</button><button data-t="adjust">Adjust</button><button data-t="sticker">Stickers</button><button data-t="text">Text</button><button data-t="ai">AI</button>
+ </div>
+ <div class="stage-wrap"><div class="stage"><canvas id="ec"></canvas><div class="ov" id="ov"></div></div></div>
+ <div class="pn" data-t="crop"><div class="row" id="ars">
+  <button data-a="0">Free</button><button data-a="1">1:1</button><button data-a="1.3333">4:3</button><button data-a="0.75">3:4</button><button data-a="1.7778">16:9</button><button data-a="-1">Reset</button></div></div>
+ <div class="pn" data-t="transform"><div class="row"><button id="rl">⟲ Left</button><button id="rr">⟳ Right</button><button id="fh">⇋ Flip H</button><button id="fv">⇅ Flip V</button></div></div>
+ <div class="pn" data-t="warp"><p class="hint">Grid warp, like Photoshop: pick a grid size, then drag the points to push and pull the image.</p>
+ <div class="row" id="wgs"><button data-g="2">2x2</button><button data-g="3" class="on">3x3</button><button data-g="4">4x4</button><button data-g="5">5x5</button><button id="wrst">Reset warp</button></div></div>
+ <div class="pn" data-t="adjust">
+  <div class="row"><div><label>Brightness</label><input type="range" id="sb" min="-100" max="100" value="0"></div><div><label>Contrast</label><input type="range" id="sc" min="-100" max="100" value="0"></div></div>
+  <div class="row"><div><label>Saturation</label><input type="range" id="ss" min="-100" max="100" value="0"></div><div><label>Warmth</label><input type="range" id="sw" min="-100" max="100" value="0"></div></div>
+  <div class="row mt8"><button id="auto">✨ Auto enhance</button><button id="adjr">Reset adjustments</button></div></div>
+ <div class="pn" data-t="sticker"><div class="row emo" id="emo"></div></div>
+ <div class="pn" data-t="text">
+  <label>Text (long text wraps automatically)</label><textarea id="ttxt" rows="2"></textarea>
+  <div class="row"><input type="color" id="tcol" value="#ffffff"><button id="addt">Add text</button></div></div>
+ <div class="pn" data-t="ai">
+  <div class="row"><div><label>Provider</label><select id="aip"><option value="openai">OpenAI</option><option value="gemini">Gemini</option></select></div>
+  <div><label>Model</label><input type="text" id="aim" value="gpt-image-1"></div></div>
+  <label>API key (kept in memory only)</label><input type="password" id="aik" autocomplete="off">
+  <label>What should change?</label><textarea id="aipr" rows="2" placeholder="e.g. remove the background, make it look like a watercolor"></textarea>
+  <div class="row mt8"><button id="aigo" class="p">Apply AI edit</button><button id="airv">Revert AI</button></div>
+  <p class="hint" id="aist">Calls go straight from your browser to the provider. They work in the downloaded local copy; the hosted page blocks outside requests.</p></div>
+ <div id="elbar" class="row mt8" hidden><div><label>Size of selected item</label><input type="range" id="esize" min="3" max="60" value="15"></div><button id="edel">Delete item</button></div>
+ <div class="row mt12"><button id="ecan">Cancel</button><button class="p" id="esave">Save edits</button></div>
+</div></div>
+
+<div class="modal" id="pv"><div class="mb">
+ <h2>Preview <span id="pvn" class="hint"></span></h2>
+ <div id="pvbox"></div>
+ <div class="row mt10"><button id="pp">◀ Prev</button><button id="pnx">Next ▶</button></div>
+ <progress id="prog" value="0" max="1" hidden></progress>
+ <div id="pvmsg" class="hint"></div>
+ <div class="row mt10"><button id="pcl">Back to editing</button><button class="p" id="pdl">Download PDF</button></div>
+</div></div>
+<script src="app.js"></script>
+</body>
+</html>
