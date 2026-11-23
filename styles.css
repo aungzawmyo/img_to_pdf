@@ -37,6 +37,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -154,6 +158,34 @@ button.on {
 
 button:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.load {
+  position: relative;
+  padding-left: 2.1rem;
+  cursor: wait;
+  pointer-events: none;
+}
+
+button.load::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin 0.65s linear infinite;
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 #drop {
@@ -404,4 +436,36 @@ progress {
   text-align: center;
   font: 11px sans-serif;
   color: #777;
+}
+
+.t .pgno {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(47, 93, 138, 0.9);
+  color: #fff;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.presets button {
+  flex: none;
+  padding: 6px 10px;
+}
+
+#histmsg,
+#eallmsg {
+  flex: 1 1 160px;
+  align-self: center;
+}
+
+#tabs {
+  margin-top: 8px;
 }
