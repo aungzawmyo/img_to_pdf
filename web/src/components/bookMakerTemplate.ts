@@ -1,15 +1,5 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>PDF Book Maker</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;700&family=Noto+Sans+Myanmar:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-</head>
-<body>
+/** Static markup for the book maker UI. */
+export const BOOK_MAKER_MARKUP = `
 <main>
 <h1>📚 PDF Book Maker</h1>
 <div class="grid">
@@ -49,14 +39,19 @@
   <p class="hint">Titles in Thai or Burmese work: the cover is drawn with web fonts. More than one image per page uses the page size above.</p>
  </section>
 </div>
-
 <section class="card">
  <h2>3. Images <span id="count" class="hint"></span></h2>
- <div id="drop">Drop images here or click to choose (JPG, PNG, WebP)<input type="file" id="files" accept="image/*" multiple hidden></div>
+ <div class="row">
+  <div><label>Import size</label><select id="importq"><option value="tiny">Tiny (1200 px, ~0.35 MB)</option><option value="small" selected>Small (1600 px, ~0.55 MB)</option><option value="fast">Fast (1800 px, ~0.85 MB)</option><option value="balanced">Balanced (2400 px, ~1.3 MB)</option><option value="best">Best (3200 px, ~2.2 MB)</option></select></div>
+ </div>
+ <div id="drop" class="mt8"><span id="droplabel">Drop images here or click to choose (JPG, PNG, WebP)</span><input type="file" id="files" accept="image/*" multiple hidden></div>
+ <div id="impstat" class="impstat" hidden>
+  <div class="impstat-row"><span class="impstat-spin" aria-hidden="true"></span><span id="impmsg">Importing…</span></div>
+  <progress id="impprog" value="0" max="1"></progress>
+ </div>
  <div id="thumbs"></div>
- <p class="hint">Drag thumbnails to reorder. ✎ opens the editor. Large photos are softened to about 3200 px on import so the book and project file stay fast, with little visible change for print.</p>
+ <p class="hint">Drag thumbnails to reorder. ✎ opens the editor. Up to 6 images import at once; files already under the size budget skip re-encode. Smaller Import size = faster and lighter projects.</p>
 </section>
-
 <section class="card">
  <h2>4. Preview and download</h2>
  <div class="row">
@@ -74,7 +69,6 @@
  <div id="pmsg" class="hint"></div>
 </section>
 </main>
-
 <div class="modal" id="ed"><div class="mb">
  <div class="row hist" id="histrow">
   <button type="button" id="undo" disabled>Undo</button>
@@ -118,7 +112,6 @@
  <p class="hint" id="eallmsg"></p>
  <div class="row mt8"><button type="button" id="ecan">Cancel</button><button type="button" class="p" id="esave">Save edits</button></div>
 </div></div>
-
 <div class="modal" id="pv"><div class="mb">
  <h2>Preview <span id="pvn" class="hint"></span></h2>
  <div id="pvbox"></div>
@@ -127,6 +120,4 @@
  <div id="pvmsg" class="hint"></div>
  <div class="row mt10"><button type="button" id="pcl">Back to editing</button><button type="button" class="p" id="pdl">Download PDF</button></div>
 </div></div>
-<script src="app.js"></script>
-</body>
-</html>
+`;

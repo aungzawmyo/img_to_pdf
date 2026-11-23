@@ -1,4 +1,16 @@
-const $ = id => document.getElementById(id);
+import { jsPDF } from 'jspdf';
+import JSZip from 'jszip';
+import {
+  COMPRESS_PRESETS,
+  compressAndDecode,
+  importAndDecode,
+  mapPool
+} from './imageCompress';
+
+export function mountBookMaker(root) {
+  if (root.dataset.mounted === '1') return () => {};
+  root.dataset.mounted = '1';
+  const $ = id => root.querySelector('#' + id);
 const cl = (v, a, b) => Math.min(b, Math.max(a, v));
 const mk = (w, h) => {
   const c = document.createElement('canvas');
@@ -9,10 +21,19 @@ const mk = (w, h) => {
 const tick = () => new Promise(r => setTimeout(r, 0));
 const SIZES = { a4: [210, 297], letter: [215.9, 279.4] };
 const FAM = "'Noto Sans Thai','Noto Sans Myanmar',sans-serif";
-const IMPORT_MAX = 3200;
 const PROJECT_MAX = 2800;
 const STORE_Q = 0.93;
+const IMPORT_CONCURRENCY = 6;
 let items = [], coverImg = null, dragIdx = null;
+
+function importPreset() {
+  const v = ($('importq') && $('importq').value) || 'small';
+  return COMPRESS_PRESETS[v] ? v : 'small';
+}
+
+function importMax() {
+  return COMPRESS_PRESETS[importPreset()].max;
+}
 
 function loadImg(src) {
   return new Promise((res, rej) => {
@@ -82,10 +103,19 @@ async function preview() {
 ['title', 'author', 'bg', 'fg', 'pos', 'font', 'size', 'orient'].forEach(id => $(id).addEventListener('input', preview));
 $('coverfile').onchange = async e => {
   const f = e.target.files[0];
-  if (!f) { coverImg = null; preview(); return; }
-  const url = URL.createObjectURL(f);
-  try { coverImg = await importImage(await loadImg(url)); } catch (x) { coverImg = null; }
-  finally { URL.revokeObjectURL(url); }
+  if (!f) {
+    if (coverImg && typeof coverImg.close === 'function') coverImg.close();
+    coverImg = null;
+    preview();
+    return;
+  }
+  try {
+    if (coverImg && typeof coverImg.close === 'function') coverImg.close();
+    const { drawable } = await compressAndDecode(f, { preset: importPreset() });
+    coverImg = drawable;
+  } catch (x) {
+    coverImg = null;
+  }
   preview();
 };
 document.fonts && document.fonts.ready.then(preview);
@@ -369,72 +399,189 @@ function onWhite(cv) {
   return c;
 }
 
+function quickThumb(it) {
+  const img = it.img, [sw, sh] = srcSize(img), max = 240;
+  const s = Math.min(1, max / Math.max(sw, sh));
+  const w = Math.max(1, Math.round(sw * s)), h = Math.max(1, Math.round(sh * s));
+  const c = mk(w, h), g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, w, h);
+  g.imageSmoothingQuality = 'medium';
+  g.drawImage(img, 0, 0, w, h);
+  it.th = c.toDataURL('image/jpeg', 0.65);
+}
+
 function updateThumb(it) {
   it.th = onWhite(bake(it.img, it.e, 240)).toDataURL('image/jpeg', .7);
 }
 
-/* ---------- gallery ---------- */
-async function addFiles(list) {
-  list = Array.from(list);
-  for (const f of list) {
-    if (!/^image\/(jpeg|png|webp|gif|bmp)/.test(f.type)) continue;
-    const url = URL.createObjectURL(f);
-    try {
-      const img = await importImage(await loadImg(url));
-      const it = { url, img, name: f.name || '', e: newEdit() };
-      updateThumb(it);
-      items.push(it);
-    } catch (x) {}
-    finally { URL.revokeObjectURL(url); }
-    renderThumbs();
+function needsEditedThumb(e) {
+  if (!e) return false;
+  return !!(e.rot || e.ang || e.fx || e.fy || e.crop || e.wp || e.auto || e.ai ||
+    (e.filter && e.filter !== 'none') || e.b || e.c || e.s || e.w || (e.els && e.els.length));
+}
+
+function thumbForItem(it) {
+  if (needsEditedThumb(it.e)) updateThumb(it);
+  else quickThumb(it);
+}
+
+function releaseImg(img) {
+  if (img && typeof img.close === 'function') {
+    try { img.close(); } catch (e) {}
   }
+}
+
+/* ---------- gallery ---------- */
+function setImportBusy(on, text, done, total) {
+  const dropEl = $('drop');
+  const label = $('droplabel');
+  const stat = $('impstat');
+  const impmsg = $('impmsg');
+  const prog = $('impprog');
+  const files = $('files');
+  const spin = stat && stat.querySelector('.impstat-spin');
+  if (dropEl) dropEl.classList.toggle('busy', on);
+  if (files) files.disabled = on;
+  if (on) {
+    if (stat) stat.hidden = false;
+    if (spin) spin.hidden = false;
+    if (label) label.textContent = total != null ? `Importing ${done} / ${total}…` : 'Importing…';
+    if (impmsg) impmsg.textContent = text || (total != null ? `Loading images… ${done} / ${total}` : 'Loading images…');
+    if (prog) {
+      prog.hidden = false;
+      prog.max = Math.max(1, total || 1);
+      prog.value = done || 0;
+    }
+  } else {
+    if (label) label.textContent = 'Drop images here or click to choose (JPG, PNG, WebP)';
+  }
+}
+
+async function addFiles(list) {
+  const files = Array.from(list).filter(f => /^image\/(jpeg|png|webp|gif|bmp)/.test(f.type));
+  if (!files.length) return;
+  const total = files.length;
+  let done = 0;
+  const msg = $('msg');
+  const impmsg = $('impmsg');
+  const stat = $('impstat');
+  const preset = importPreset();
+  const bump = () => {
+    const line = `Importing ${done} / ${total}…`;
+    setImportBusy(true, line, done, total);
+    if (msg) msg.textContent = line;
+  };
+  bump();
+  const galleryItems = await mapPool(files, IMPORT_CONCURRENCY, async (file) => {
+    try {
+      const { drawable, result } = await importAndDecode(file, { preset, maxIteration: 3 });
+      const it = {
+        url: null,
+        img: drawable,
+        name: result.name || file.name || '',
+        e: newEdit()
+      };
+      quickThumb(it);
+      done++;
+      bump();
+      await tick();
+      return it;
+    } catch {
+      done++;
+      bump();
+      return null;
+    }
+  });
+  for (const it of galleryItems) {
+    if (!it) continue;
+    items.push(it);
+    appendThumb(it, items.length - 1);
+  }
+  renderThumbs();
+  const n = galleryItems.filter(Boolean).length;
+  const doneText = n ? `${n} image${n === 1 ? '' : 's'} added.` : 'No images could be imported.';
+  setImportBusy(false);
+  if (stat) {
+    stat.hidden = false;
+    const spin = stat.querySelector('.impstat-spin');
+    if (spin) spin.hidden = true;
+  }
+  if (impmsg) impmsg.textContent = doneText;
+  if ($('impprog')) $('impprog').hidden = true;
+  if (msg) msg.textContent = doneText;
+  setTimeout(() => {
+    if (stat && impmsg && impmsg.textContent === doneText) {
+      stat.hidden = true;
+      const spin = stat.querySelector('.impstat-spin');
+      if (spin) spin.hidden = false;
+    }
+  }, 2500);
+}
+
+function thumbCard(it, i) {
+  const per = Math.max(1, +($('per') && $('per').value) || 1);
+  const d = document.createElement('div');
+  d.className = 't';
+  d.draggable = true;
+  const page = Math.floor(i / per) + 1;
+  d.innerHTML = `<span class="n">${i + 1}</span>${per > 1 ? `<span class="pgno">p${page}</span>` : ''}<div class="im"><img src="${it.th}" alt=""></div><div class="b"><button data-a="e" title="Edit">✎</button><button data-a="r" title="Rotate">⟳</button><button data-a="d" title="Delete">✕</button></div>`;
+  d.querySelector('[data-a=e]').onclick = () => openEd(it);
+  d.querySelector('[data-a=r]').onclick = () => {
+    it.e.rot = (it.e.rot + 90) % 360;
+    it.e.crop = null;
+    it.e.wp = null;
+    updateThumb(it);
+    renderThumbs();
+  };
+  d.querySelector('[data-a=d]').onclick = () => {
+    const idx = items.indexOf(it);
+    if (idx < 0) return;
+    if (it.url && it.url.startsWith('blob:')) URL.revokeObjectURL(it.url);
+    releaseImg(it.img);
+    items.splice(idx, 1);
+    renderThumbs();
+  };
+  d.ondragstart = () => { dragIdx = items.indexOf(it); d.classList.add('drag'); };
+  d.ondragend = () => d.classList.remove('drag');
+  d.ondragover = e => e.preventDefault();
+  d.ondrop = e => {
+    e.preventDefault();
+    const iTo = items.indexOf(it);
+    if (dragIdx === null || dragIdx < 0 || dragIdx === iTo) return;
+    const [m] = items.splice(dragIdx, 1);
+    items.splice(iTo, 0, m);
+    dragIdx = null;
+    renderThumbs();
+  };
+  return d;
+}
+
+function appendThumb(it, i) {
+  const box = $('thumbs');
+  if (!box) return;
+  box.appendChild(thumbCard(it, i));
+  $('count').textContent = items.length ? `(${items.length})` : '';
 }
 
 function renderThumbs() {
   const box = $('thumbs');
   box.innerHTML = '';
   $('count').textContent = items.length ? `(${items.length})` : '';
-  const per = Math.max(1, +($('per') && $('per').value) || 1);
-  items.forEach((it, i) => {
-    const d = document.createElement('div');
-    d.className = 't';
-    d.draggable = true;
-    const page = Math.floor(i / per) + 1;
-    d.innerHTML = `<span class="n">${i + 1}</span>${per > 1 ? `<span class="pgno">p${page}</span>` : ''}<div class="im"><img src="${it.th}"></div><div class="b"><button data-a="e" title="Edit">✎</button><button data-a="r" title="Rotate">⟳</button><button data-a="d" title="Delete">✕</button></div>`;
-    d.querySelector('[data-a=e]').onclick = () => openEd(it);
-    d.querySelector('[data-a=r]').onclick = () => {
-      it.e.rot = (it.e.rot + 90) % 360;
-      it.e.crop = null;
-      it.e.wp = null;
-      updateThumb(it);
-      renderThumbs();
-    };
-    d.querySelector('[data-a=d]').onclick = () => {
-      if (it.url && it.url.startsWith('blob:')) URL.revokeObjectURL(it.url);
-      items.splice(i, 1);
-      renderThumbs();
-    };
-    d.ondragstart = () => { dragIdx = i; d.classList.add('drag'); };
-    d.ondragend = () => d.classList.remove('drag');
-    d.ondragover = e => e.preventDefault();
-    d.ondrop = e => {
-      e.preventDefault();
-      if (dragIdx === null || dragIdx === i) return;
-      const [m] = items.splice(dragIdx, 1);
-      items.splice(i, 0, m);
-      dragIdx = null;
-      renderThumbs();
-    };
-    box.appendChild(d);
-  });
+  items.forEach((it, i) => box.appendChild(thumbCard(it, i)));
 }
 
 const drop = $('drop');
-drop.onclick = () => $('files').click();
+drop.onclick = () => { if (!drop.classList.contains('busy')) $('files').click(); };
 $('files').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
-drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragover = e => { if (drop.classList.contains('busy')) return; e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
+drop.ondrop = e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  if (drop.classList.contains('busy')) return;
+  addFiles(e.dataTransfer.files);
+};
 $('per').onchange = () => renderThumbs();
 
 /* ---------- editor ---------- */
@@ -956,7 +1103,7 @@ async function buildPages(maxPx, q, dpi, prog) {
 
 function makePdf(pages) {
   const P = pages[0], m = +$('margin').value;
-  const doc = new jspdf.jsPDF({ unit: 'mm', format: [P.pw, P.ph], orientation: P.pw > P.ph ? 'l' : 'p', compress: true });
+  const doc = new jsPDF({ unit: 'mm', format: [P.pw, P.ph], orientation: P.pw > P.ph ? 'l' : 'p', compress: true });
   pages.forEach((p, i) => {
     if (i) doc.addPage([p.pw, p.ph], p.pw > p.ph ? 'l' : 'p');
     doc.addImage(p.data, 'JPEG', (p.pw - p.dw) / 2, (p.ph - p.dh) / 2, p.dw, p.dh);
@@ -984,7 +1131,6 @@ $('pp').onclick = () => { pvI--; showPv(); };
 $('pnx').onclick = () => { pvI++; showPv(); };
 $('pcl').onclick = () => $('pv').classList.remove('on');
 $('prevbtn').onclick = async () => {
-  if (!window.jspdf) { $('msg').textContent = 'PDF library failed to load. Check your connection and reload.'; return; }
   if (!items.length) { $('msg').textContent = 'Please add at least one image.'; return; }
   $('msg').textContent = 'Building preview…';
   $('prevbtn').disabled = true;
@@ -1091,8 +1237,10 @@ function normEdit(raw) {
   return e;
 }
 
-function hasAlpha(img) {
-  const w = Math.min(img.width, 48), h = Math.min(img.height, 48);
+function hasAlpha(img, mime) {
+  if (mime === 'image/jpeg' || mime === 'image/jpg') return false;
+  const w = Math.min(img.width || img.naturalWidth || 1, 48);
+  const h = Math.min(img.height || img.naturalHeight || 1, 48);
   const c = mk(w, h), g = c.getContext('2d');
   g.drawImage(img, 0, 0, w, h);
   const d = g.getImageData(0, 0, w, h).data;
@@ -1146,12 +1294,23 @@ async function canvasToStoreBlob(cv, alpha) {
   return null;
 }
 
+async function canvasToDrawable(cv) {
+  if (typeof createImageBitmap === 'function') {
+    try { return await createImageBitmap(cv); } catch (e) {}
+  }
+  return loadImg(cv.toDataURL('image/jpeg', STORE_Q));
+}
+
+async function importFile(file) {
+  const { drawable } = await importAndDecode(file, { preset: importPreset(), maxIteration: 3 });
+  return drawable;
+}
+
+/** Downscale an already-decoded image (legacy helper). */
 async function importImage(img) {
-  const cv = downscaleToCanvas(img, IMPORT_MAX);
-  const packed = await canvasToStoreBlob(cv, hasAlpha(img));
-  if (!packed) return img;
-  const url = URL.createObjectURL(packed.blob);
-  try { return await loadImg(url); } finally { URL.revokeObjectURL(url); }
+  const cv = downscaleToCanvas(img, importMax());
+  if (cv.width === (img.width || img.naturalWidth) && cv.height === (img.height || img.naturalHeight)) return img;
+  return canvasToDrawable(cv);
 }
 
 async function packDataUrl(str, maxEdge) {
@@ -1226,7 +1385,8 @@ function projectSettings() {
     quality: $('quality').value,
     pnum: $('pnum').value,
     per: $('per').value,
-    gap: $('gap').value
+    gap: $('gap').value,
+    importq: ($('importq') && $('importq').value) || 'small'
   };
 }
 
@@ -1279,7 +1439,6 @@ async function writePath(root, path, blob) {
 }
 
 async function saveProjectZip(onProg, onZip) {
-  if (!window.JSZip) throw new Error('ZIP library did not load. Check your connection and reload.');
   const { manifest, files } = await buildProjectBundle(onProg);
   const zip = new JSZip();
   zip.file('project.json', JSON.stringify(manifest));
@@ -1307,7 +1466,7 @@ async function saveProjectFolder(onProg) {
 }
 
 function applyProjectSettings(data) {
-  for (const id of ['title', 'author', 'bg', 'fg', 'pos', 'font', 'size', 'orient', 'fit', 'margin', 'quality', 'pnum', 'per', 'gap']) {
+  for (const id of ['title', 'author', 'bg', 'fg', 'pos', 'font', 'size', 'orient', 'fit', 'margin', 'quality', 'pnum', 'per', 'gap', 'importq']) {
     if (data[id] != null && $(id)) $(id).value = data[id];
   }
 }
@@ -1317,7 +1476,10 @@ async function hydrateProject(data, resolvePath, onProg) {
     throw new Error('This file is not a PDF Book Maker project.');
   }
   applyProjectSettings(data);
-  items.forEach(it => { if (it.url && it.url.startsWith('blob:')) URL.revokeObjectURL(it.url); });
+  items.forEach(it => {
+    if (it.url && it.url.startsWith('blob:')) URL.revokeObjectURL(it.url);
+    releaseImg(it.img);
+  });
   items = [];
   cur = null;
   E = null;
@@ -1360,7 +1522,7 @@ async function hydrateProject(data, resolvePath, onProg) {
       }
     }
     const it = { url, img, name: im.name || '', e };
-    updateThumb(it);
+    thumbForItem(it);
     items.push(it);
     if (onProg) onProg(i + 1, total);
     await tick();
@@ -1370,7 +1532,6 @@ async function hydrateProject(data, resolvePath, onProg) {
 }
 
 async function loadProjectZip(file, onProg) {
-  if (!window.JSZip) throw new Error('ZIP library did not load. Check your connection and reload.');
   const zip = await JSZip.loadAsync(file);
   let entry = zip.file('project.json');
   if (!entry) {
@@ -1521,3 +1682,15 @@ $('openpf').onclick = async () => {
   $('prevbtn').disabled = false;
   $('openp').disabled = false;
 };
+
+  return () => {
+    root.dataset.mounted = '0';
+    items.forEach(it => {
+      if (it.url && it.url.startsWith('blob:')) URL.revokeObjectURL(it.url);
+      releaseImg(it.img);
+    });
+    items.length = 0;
+    releaseImg(coverImg);
+    coverImg = null;
+  };
+}
